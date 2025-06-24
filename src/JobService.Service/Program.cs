@@ -1,24 +1,18 @@
-using System;
-using System.Reflection;
-using System.Threading.Tasks;
 using JobService.Components;
 using JobService.Service;
 using JobService.Service.Components;
 using MassTransit;
 using MassTransit.EntityFrameworkCoreIntegration;
-using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
-using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
-using Microsoft.Extensions.Hosting;
 using NSwag;
 using ResQueue;
 using ResQueue.Enums;
 using Serilog;
 using Serilog.Events;
+using System.Reflection;
 
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Information()
@@ -54,26 +48,38 @@ var connectionString = builder.Configuration.GetConnectionString("JobService");
 builder.Services.AddOptions<SqlTransportOptions>()
     .Configure(options =>
     {
-        options.ConnectionString = connectionString;
+        options.Host = "localhost,48364";
+        options.Database = "WES_001";
+        //options.Role = "transport";
+        options.Schema = "transport";
+        options.Username = "sa"; // the application-level credentials to use
+        options.Password = "Password!";
+        options.AdminUsername = "sa"; // the admin credentials to create the tables, etc.
+        options.AdminPassword = "Password!";
     });
 
-builder.Services.AddPostgresMigrationHostedService();
+builder.Services.AddSqlServerMigrationHostedService();
 
 // Add web-based dashboard
 builder.Services.AddResQueue(opt =>
 {
-    opt.SqlEngine = ResQueueSqlEngine.Postgres;
+    opt.SqlEngine = ResQueueSqlEngine.SqlServer;
 });
 builder.Services.AddResQueueMigrationsHostedService();
 
 builder.Services.AddDbContext<JobServiceSagaDbContext>(optionsBuilder =>
 {
-    optionsBuilder.UseNpgsql(connectionString, m =>
+    optionsBuilder.UseSqlServer(connectionString, m =>
     {
         m.MigrationsAssembly(Assembly.GetExecutingAssembly().GetName().Name);
         m.MigrationsHistoryTable($"__{nameof(JobServiceSagaDbContext)}");
         
         m.EnableRetryOnFailure();
+    });
+
+    optionsBuilder.ConfigureWarnings(warnings =>
+    {
+        warnings.Ignore(RelationalEventId.PendingModelChangesWarning);
     });
 });
 
@@ -98,12 +104,12 @@ builder.Services.AddMassTransit(x =>
         .EntityFrameworkRepository(r =>
         {
             r.ExistingDbContext<JobServiceSagaDbContext>();
-            r.UsePostgres();
+            r.UseSqlServer();
         });
 
     x.SetKebabCaseEndpointNameFormatter();
 
-    x.UsingPostgres((context, cfg) =>
+    x.UsingSqlServer((context, cfg) =>
     {
         cfg.UseSqlMessageScheduler();
         cfg.UseJobSagaPartitionKeyFormatters();
@@ -137,7 +143,7 @@ app.UseRouting();
 app.UseAuthorization();
 
 // Bind dashboard to the /resqueue route
-app.UseResQueue("resqueue");
+app.UseResQueue();
 
 static Task HealthCheckResponseWriter(HttpContext context, HealthReport result)
 {
